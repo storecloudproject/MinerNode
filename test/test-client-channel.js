@@ -107,7 +107,6 @@ describe('Initialize client channel', function () {
         let numberOfMessagesreceived = 0;
         // The callback function to receive data from connected servers.
         const readCallback = (data) => {
-            //console.log(data);
             numberOfMessagesreceived += 1;
         }
         
@@ -119,13 +118,68 @@ describe('Initialize client channel', function () {
             clientChannel.send(data);
         }
         
-        Utils.interval(send, 100, 10, options.servers);
+        Utils.interval(send, 100, 5, options.servers);
         
         // Wait for responses from connected servers. Wait little bit more than the 
         // above time to receive messages.
         setTimeout(() => {
-                expect(numberOfMessagesreceived).to.equal(options.servers.length*10); 
-        }, 2000);
+                expect(numberOfMessagesreceived).to.equal(options.servers.length*5); 
+                clientChannel.close();
+        }, 1000);
+        
+    });
+    
+    it('should be able to create multiple client channels connected to same servers', async () => {
+        
+        class Client {
+            constructor(id) {
+                this.id = id;
+                this.clientChannel = new ClientChannel(options);
+                this.messagesReceived = 0;
+            }
+            
+            async init() {
+                const self = this;
+                const readCallback = (data) => {
+                    console.log('\nClient ' + self.id + ':'); console.log(data);
+                    self.messagesReceived += 1;
+                }
+                const result = await this.clientChannel.initialize(readCallback); 
+                return result;
+            }
+            
+            write(message) {
+                this.clientChannel.send(message);
+            }
+            
+            get messageCount() {
+                return this.messagesReceived;
+            }
+            
+            close() {
+                this.clientChannel.close();
+            }
+        }
+        
+        const clients = [new Client(1), new Client(2)];
+        
+        clients.forEach(async (c) => {
+            await c.init();
+            c.write(options.servers);
+        })
+        
+        // Wait for responses from connected servers.
+        let totalMessages = 0;
+        
+        setTimeout(() => {
+            clients.forEach((c) => {
+                totalMessages += c.messageCount;
+                c.close();
+            })
+            
+            expect(totalMessages).to.equal(options.servers.length*clients.length); 
+            
+        }, 1000);
         
     });
 })
