@@ -42,7 +42,6 @@ module.exports = class ClientChannel {
         this.options.retryAttempts = 3;     // Number of retry attempts to reestablish connections.
         this.options.retryTimeoutInMS = 1000;   
         
-        this.connectedServers = [];     // Holds the list of servers with successful connections.
         this.ready = false;     // The client channel will be ready when it connects to all servers.
     }
     
@@ -83,9 +82,6 @@ module.exports = class ClientChannel {
                     self.createNoiseChannel(matchingServer, readCallback);
                     
                     successfulConnections += 1;
-
-                    // Handy list of servers send/receive data.
-                    self.connectedServers.push(matchingServer);
                 } else {
                     matchingServer.socket = null; 
                 }
@@ -151,11 +147,7 @@ module.exports = class ClientChannel {
         
         serverInfo.socket.on('close', () => {
             self.reconnect(serverInfo, readCallback);
-        })
-
-        serverInfo.socket.on('end', () => {
-            self.reconnect(serverInfo, readCallback);
-        })
+        });
     }
     
     /**
@@ -223,11 +215,26 @@ module.exports = class ClientChannel {
     send(jsonData) {
         const self = this;
         const stringData = JSON.stringify(jsonData);    // TO-DO.Use fast-stringify.
-        this.connectedServers.forEach(server => {
+        this.options.servers.forEach(server => {
             if (server.socket !== null) {
                 // Socket may be temporarily set to null, if the client loses connection
-                // to this server.
+                // to this server or initial connection attempts failed.
                 server.noiseClient.encrypt.write(stringData);   
+            }
+        });
+    }
+    
+    /*
+     * Closes this client channel. Severes all connections to connected servers.
+     */
+    
+    close() {
+        this.options.servers.forEach(server => {
+            if (server.socket !== null) {
+                server.socket.end();
+                server.socket.removeAllListeners();
+                server.socket.destroy();
+                server.socket = null;
             }
         });
     }
