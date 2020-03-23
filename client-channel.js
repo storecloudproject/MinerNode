@@ -1,5 +1,6 @@
 const net = require('net');
 const noise = require('noise-protocol-stream');
+const Utils = require('./utils');
 
 /**
  * Validation miners use the client channel to connect to one or more 
@@ -37,9 +38,11 @@ module.exports = class ClientChannel {
         }
         
         // Make a copy of options to keep the originaldata unmutated.
-        this.options = JSON.parse(JSON.stringify(options));
-        this.connectedServers = [];     // Holds the list of servers with successful connections.
+        this.options = Utils.clone(options);
+        this.options.retryAttempts = 3;     // Number of retry attempts to reestablish connections.
+        this.options.retryTimeoutInMS = 1000;   
         
+        this.connectedServers = [];     // Holds the list of servers with successful connections.
         this.ready = false;     // The client channel will be ready when it connects to all servers.
     }
     
@@ -74,24 +77,12 @@ module.exports = class ClientChannel {
                 if (result.socket !== null) {
                     // We are not using results.filter() to retain the array indices
                     // to map to options.servers.
-                    matchingServer.noiseClient = noise({ initiator: true });
                     matchingServer.socket = result.socket;
                     
-                    successfulConnections += 1;
+                    // Create Noise channel on the socket for encrypted message exchanges.
+                    self.createNoiseChannel(matchingServer, readCallback);
                     
-                    matchingServer.noiseClient.encrypt
-                      .pipe(matchingServer.socket)
-                      .pipe(matchingServer.noiseClient.decrypt)
-                      .on('data', (data) => {
-                        // Pass the data to be read callback function with the serverAddress:port
-                        // key, so the callers know the server sending the response.
-                        const response = {
-                            from: (matchingServer.serverAddress + ':' + matchingServer.serverPort),
-                            // Response should be JSON.
-                            data: JSON.parse(data.toString())
-                        }
-                        readCallback(response);
-                      })
+                    successfulConnections += 1;
 
                     // Handy list of servers send/receive data.
                     self.connectedServers.push(matchingServer);
@@ -131,20 +122,94 @@ module.exports = class ClientChannel {
     }
     
     /**
-     * Finds a server with the specified address and port.
-     * @param serverInfo - containing serverAddress and port as:
-     * {
-     *      serverAddress: '<server IP address>',
-     *      serverPort: <server port number>
-     * }
-     * @return - Matching serverInfo from options.servers or null, if no matches found.
+     * Creates a Noise channel on the socket for encrypted message exchanges between this 
+     * client and connected servers.
+     * @param serverInfo - The object containing server info and the socket already established.
+     * @param readCallback - A callback function to receive data from connected server.
      */
-    findMatchingServer(serverInfo) {
-        const matchingServer = this.options.servers.filter(server => {
-            return server.serverAddress === serverInfo.serverAddress && server.serverPort === serverInfo.serverPort;
-        });
+    
+    createNoiseChannel(serverInfo, readCallback) {
+        const self = this;
         
-        return matchingServer.length === 1 ? matchingServer[0] : null;
+        serverInfo.noiseClient = noise({ initiator: true });
+        serverInfo.noiseClient.encrypt
+          .pipe(serverInfo.socket)
+          .pipe(serverInfo.noiseClient.decrypt)
+          .on('data', (data) => {
+            // Pass the data to be read callback function with the serverAddress:port
+            // key, so the callers know the server sending the response.
+            const response = {
+                from: (serverInfo.serverAddress + ':' + serverInfo.serverPort),
+                // Response should be JSON.
+                data: JSON.parse(data.toString())
+            }
+            readCallback(response);
+          });
+        
+        // It is possible that the server gets disconnected. So, add reconnect
+        // logic to the socket.
+        
+        serverInfo.socket.on('close', () => {
+            self.reconnect(serverInfo, readCallback);
+        })
+
+        serverInfo.socket.on('end', () => {
+            self.reconnect(serverInfo, readCallback);
+        })
+    }
+    
+    /**
+     * Reconnects to a disconnected server. It is possible that the server is permanently down,
+     * so the reconnect may fail.
+     * @param serverInfo - The object containing server info to connect to.
+     * @param readCallback - A callback function to receive data from connected server.
+     */
+    
+    reconnect(serverInfo, readCallback) {
+        const self = this;
+        
+        serverInfo.retryAttempts = 0;
+        
+        // Connect to the requested server.
+        const connect = async () => {
+          return await self.connect(serverInfo);
+        };
+        
+        // Helper to retry connecting to the specified server.
+        const retry = () => {
+            if (++serverInfo.retryAttempts < self.options.retryAttempts) {
+                Utils.interval(reestablish, (this.options.retryTimeoutInMS * serverInfo.retryAttempts * 2), 1);      
+            }
+        }
+        
+        // Reestablish the connection to the lost server. 
+        const reestablish = async () => {
+            // Remove all existing listeners from the current socket.
+            if (serverInfo.socket !== null) {
+                serverInfo.socket.removeAllListeners();
+                serverInfo.socket = null;   
+            }
+            
+            try {
+                const result = await connect();  
+
+                if (result.socket !== null) {
+                    serverInfo.socket = result.socket;
+
+                    // Create Noise channel on the socket for encrypted message exchanges.
+                    self.createNoiseChannel(serverInfo, readCallback);
+                } else {
+                    // Connecting to server failed. Retry if we can.
+                    retry();
+                }
+            } catch(e) {
+                // An exception here shouldn't affect client functionality because this is 
+                // retry, so we will attempt retrying again.
+                retry();
+            }
+        }
+        
+        Utils.interval(reestablish, this.options.retryTimeoutInMS, 1);
     }
     
     /**
@@ -159,7 +224,11 @@ module.exports = class ClientChannel {
         const self = this;
         const stringData = JSON.stringify(jsonData);    // TO-DO.Use fast-stringify.
         this.connectedServers.forEach(server => {
-            server.noiseClient.encrypt.write(stringData);
+            if (server.socket !== null) {
+                // Socket may be temporarily set to null, if the client loses connection
+                // to this server.
+                server.noiseClient.encrypt.write(stringData);   
+            }
         });
     }
 }
