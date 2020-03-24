@@ -124,7 +124,7 @@ describe('Initialize client channel', function () {
         // above time to receive messages.
         setTimeout(() => {
                 expect(numberOfMessagesreceived).to.equal(options.servers.length*5); 
-                clientChannel.close();
+                //clientChannel.close();
         }, 1000);
         
     });
@@ -174,7 +174,7 @@ describe('Initialize client channel', function () {
         setTimeout(() => {
             clients.forEach((c) => {
                 totalMessages += c.messageCount;
-                c.close();
+                //c.close();
             })
             
             expect(totalMessages).to.equal(options.servers.length*clients.length); 
