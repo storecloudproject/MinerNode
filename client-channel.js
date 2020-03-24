@@ -1,5 +1,5 @@
 const net = require('net');
-const noise = require('noise-protocol-stream');
+const NoiseStreamEngine = require('./noise-stream-engine');
 const Utils = require('./utils');
 
 /**
@@ -125,22 +125,12 @@ module.exports = class ClientChannel {
      */
     
     createNoiseChannel(serverInfo, readCallback) {
-        const self = this;
+        const self = this,
+              serverIdentifier = (serverInfo.serverAddress + ':' + serverInfo.serverPort);
         
-        serverInfo.noiseClient = noise({ initiator: true });
-        serverInfo.noiseClient.encrypt
-          .pipe(serverInfo.socket)
-          .pipe(serverInfo.noiseClient.decrypt)
-          .on('data', (data) => {
-            // Pass the data to be read callback function with the serverAddress:port
-            // key, so the callers know the server sending the response.
-            const response = {
-                from: (serverInfo.serverAddress + ':' + serverInfo.serverPort),
-                // Response should be JSON.
-                data: JSON.parse(data.toString())
-            }
-            readCallback(response);
-          });
+        serverInfo.noiseClient = new NoiseStreamEngine(serverInfo.socket, serverIdentifier);
+        
+        serverInfo.noiseClient.createInitiatorChannel(readCallback);
         
         // It is possible that the server gets disconnected. So, add reconnect
         // logic to the socket.
@@ -180,6 +170,7 @@ module.exports = class ClientChannel {
             if (serverInfo.socket !== null) {
                 serverInfo.socket.removeAllListeners();
                 serverInfo.socket = null;   
+                serverInfo.noiseClient = null;
             }
             
             try {
@@ -213,13 +204,11 @@ module.exports = class ClientChannel {
      */
     
     send(jsonData) {
-        const self = this;
-        const stringData = JSON.stringify(jsonData);    // TO-DO.Use fast-stringify.
         this.options.servers.forEach(server => {
-            if (server.socket !== null) {
-                // Socket may be temporarily set to null, if the client loses connection
+            if (server.socket !== null && server.noiseClient !== null) {
+                // The channel may be temporarily set to null, if the client loses connection
                 // to this server or initial connection attempts failed.
-                server.noiseClient.encrypt.write(stringData);   
+                server.noiseClient.send(jsonData);   
             }
         });
     }
@@ -235,6 +224,7 @@ module.exports = class ClientChannel {
                 server.socket.removeAllListeners();
                 server.socket.destroy();
                 server.socket = null;
+                server.noiseClient = null;
             }
         });
     }
