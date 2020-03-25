@@ -124,7 +124,7 @@ describe('Initialize client channel', function () {
         // above time to receive messages.
         setTimeout(() => {
                 expect(numberOfMessagesreceived).to.equal(options.servers.length*5); 
-                //clientChannel.close();
+                clientChannel.close();
         }, 1000);
         
     });
@@ -174,11 +174,56 @@ describe('Initialize client channel', function () {
         setTimeout(() => {
             clients.forEach((c) => {
                 totalMessages += c.messageCount;
-                //c.close();
+                c.close();
             })
             
             expect(totalMessages).to.equal(options.servers.length*clients.length); 
             
+        }, 1000);
+        
+    });
+})
+
+describe('Use Noise-Peer as the engine', function () {
+    it('should send data to connected servers and receive corresponding responses', async () => {
+        const noisePeerOptions = {
+            clientPrivateKey: 'IduDjH3fbAEhBEHQcZS3oIyILb/EPA29xThHfB/vmB0GYu0jE79nk6U7ZZ13qxUX99WTAU4iQFRBOdfuIaf11Q==',
+            servers: [
+                {
+                    serverAddress: 'localhost',
+                    serverPort: 5000
+                },
+                {
+                    serverAddress: 'localhost',
+                    serverPort: 5001
+                }
+            ],
+            noiseEngine: 'noise-peer'
+        };
+        const clientChannel = new ClientChannel(noisePeerOptions);
+        
+        let numberOfMessagesreceived = 0;
+        // The callback function to receive data from connected servers.
+        const readCallback = (data) => {
+            console.log('\nClient received:'); console.log(data);
+            numberOfMessagesreceived += 1;
+        }
+        
+        // Result will be number of successful connections.
+        const result = await clientChannel.initialize(readCallback);  
+        
+        // Send some data to connected servers in a loop 
+        const send = (data) => {
+            clientChannel.send(data);
+        }
+        
+        Utils.interval(send, 100, 5, noisePeerOptions.servers);
+        
+        // Wait for responses from connected servers. Wait little bit more than the 
+        // above time to receive messages.
+        setTimeout(() => {
+                expect(numberOfMessagesreceived).to.equal(noisePeerOptions.servers.length*5); 
+                clientChannel.close();
         }, 1000);
         
     });
