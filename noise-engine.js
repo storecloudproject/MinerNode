@@ -48,4 +48,13 @@ module.exports = class NoiseEngine {
     send(jsonData) {
         Utils.notImplemented();   
     }
+    
+    /**
+     * Close the noise channel. Depending on the engine, explicit closing 
+     * may be required.
+     */
+    
+    close() {
+        Utils.notImplemented();
+    }
 }

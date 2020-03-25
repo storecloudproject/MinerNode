@@ -1,16 +1,19 @@
 /**
- * Uses noise-protocol-stream as the encryption engine. The security characteristics
- * of these engines are still not fully determined, so we add support for multiple
- * engines for evaluation.
+ * Uses noise-peer as the encryption engine.This implementation allows 
+ * specifying different handshaking patterns unlike noise-protocol-stream,
+ * which allows only Noise_XX pattern. While this pattern is what we want
+ * being able to experiment with other patterns is beneficial.
  *
  * See https://github.com/kapetan/noise-protocol-stream. This module uses
- * Noise_XX_25519_AESGCM_SHA256 as the Noise protocol.
+ * Noise_*_25519_XChaChaPoly_BLAKE2b as the Noise protocol where * = XX
+ * by default.
  */
 
-const noise = require('noise-protocol-stream');
+const noise = require('noise-peer');
 const NoiseEngine = require('./noise-engine');  // Base interface.
+const pump = require('pump');
 
-module.exports = class NoiseStreamEngine extends NoiseEngine {
+module.exports = class NoisePeerEngine extends NoiseEngine {
     
     /**
      * See NoiseEngine for descriptions about parameters.
@@ -27,28 +30,23 @@ module.exports = class NoiseStreamEngine extends NoiseEngine {
         
         const self = this;
         
-        this.noiseChannel = noise({ initiator: true });
-        this.noiseChannel.encrypt
-          .pipe(self.socket)
-          .pipe(self.noiseChannel.decrypt)
-          .on('data', (data) => {
-            // Pass the data to be read callback function with the serverAddress:port
-            // key, so the callers know the server sending the response.
+        this.noiseChannel = noise(this.socket, true);   // Initiator.
+        this.noiseChannel.on('data', (data) => {
             const response = {
                 from: self.serverIdentifier,
                 // Response should be JSON.
                 data: JSON.parse(data.toString())
             }
             readCallback(response);
-          });
+        })
     }
     
     send(jsonData) {
         const stringData = JSON.stringify(jsonData);    // TO-DO.Use fast-stringify.
-        this.noiseChannel.encrypt.write(stringData);   
+        this.noiseChannel.write(stringData);   
     }
     
     close() {
-        // No explicit close is required for this engine.
+        this.noiseChannel.end();
     }
 }

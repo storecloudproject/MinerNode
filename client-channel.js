@@ -1,5 +1,4 @@
 const net = require('net');
-const NoiseStreamEngine = require('./noise-stream-engine');
 const Utils = require('./utils');
 
 /**
@@ -36,9 +35,18 @@ module.exports = class ClientChannel {
         if (!options.servers || !Array.isArray(options.servers) || options.servers.length === 0) {
             throw new Error('options parameter should list one or more servers to connect this client channel to.')
         }
-        
+                
         // Make a copy of options to keep the originaldata unmutated.
         this.options = Utils.clone(options);
+        
+        this.supportedNoiseEngines = ['noise-stream', 'noise-peer'];
+    
+        
+        // During development and testing, we will support specifying different noise engines.
+        if (!this.options.noiseEngine || this.supportedNoiseEngines.indexOf(this.options.noiseEngine) === -1) {
+           this.options.noiseEngine = this.supportedNoiseEngines[0];
+        }
+        
         this.options.retryAttempts = 3;     // Number of retry attempts to reestablish connections.
         this.options.retryTimeoutInMS = 1000;   
         
@@ -118,6 +126,33 @@ module.exports = class ClientChannel {
     }
     
     /**
+     * Returns the noise engine depending on the engine requested. This implementation
+     * prevents creating unnecessary engines at runtime while being a little naive about the logic
+     * to determine what engine to create.
+     * @param serverInfo - The object containing server info and the socket already established.
+     * @return the requested noise engine.
+     */
+    
+    noiseEngine(serverInfo) {
+        const supportedEngines = this.supportedNoiseEngines;
+        const serverIdentifier = (serverInfo.serverAddress + ':' + serverInfo.serverPort);
+        let noiseEngine;
+        
+        switch(this.options.noiseEngine) {
+            case supportedEngines[0]:
+                noiseEngine = new (require('./noise-stream-engine'))(serverInfo.socket, serverIdentifier);
+            break;
+            case supportedEngines[1]:
+                noiseEngine = new (require('./noise-peer-engine'))(serverInfo.socket, serverIdentifier);
+            break;
+            default:
+                noiseEngine = new (require('./noise-stream-engine'))(serverInfo.socket, serverIdentifier);
+            break;
+        }
+        return noiseEngine;
+    }
+    
+    /**
      * Creates a Noise channel on the socket for encrypted message exchanges between this 
      * client and connected servers.
      * @param serverInfo - The object containing server info and the socket already established.
@@ -125,10 +160,9 @@ module.exports = class ClientChannel {
      */
     
     createNoiseChannel(serverInfo, readCallback) {
-        const self = this,
-              serverIdentifier = (serverInfo.serverAddress + ':' + serverInfo.serverPort);
+        const self = this;
         
-        serverInfo.noiseClient = new NoiseStreamEngine(serverInfo.socket, serverIdentifier);
+        serverInfo.noiseClient = this.noiseEngine(serverInfo);
         
         serverInfo.noiseClient.createInitiatorChannel(readCallback);
         
@@ -224,6 +258,7 @@ module.exports = class ClientChannel {
                 server.socket.removeAllListeners();
                 server.socket.destroy();
                 server.socket = null;
+                server.noiseClient.close();
                 server.noiseClient = null;
             }
         });
