@@ -8,28 +8,17 @@
  */
 
 const noise = require('noise-protocol-stream');
+const NoiseEngine = require('./noise-engine');  // Base interface.
 
-module.exports = class NoiseStreamEngine {
+module.exports = class NoiseStreamEngine extends NoiseEngine {
     
     /**
-     * @param socket - TCP socket on which the noise protocol will be built.
-     * @param serverIdentifier - Any unique identifier -- "ip address:port" for example -- 
-     * that the caller wants to supply. This identifier is used in the responses 
-     * received from the connected server to identify the source of the messages.
+     * See NoiseEngine for descriptions about parameters.
      */
     
     constructor(socket, serverIdentifier) {
-        this.socket = socket;
-        this.serverIdentifier = serverIdentifier;
-        this.noiseChannel = null;
+        super(socket, serverIdentifier);
     }
-    
-    /**
-     * Creates a Noise channel on the socket for encrypted message exchanges.
-     * @param readCallback - A callback function to receive data from the remote server.
-     * Since each engine handles receiving data differently, the callback is passed to
-     * the engine for proper handling of data received.
-     */
     
     createInitiatorChannel(readCallback) {
         if (!readCallback || typeof readCallback !== "function") {
@@ -53,14 +42,6 @@ module.exports = class NoiseStreamEngine {
             readCallback(response);
           });
     }
-    
-    /**
-     * Sends the data to server connected by the socket associated with this noise channel
-     * @param jsonData - Data to send in JSON format.
-     * This method is asynchronous, so the responses, if any, will be available in
-     * the read callback supplied when the noise channel is created.
-     * The data is encrypted end to end.
-     */
     
     send(jsonData) {
         const stringData = JSON.stringify(jsonData);    // TO-DO.Use fast-stringify.
