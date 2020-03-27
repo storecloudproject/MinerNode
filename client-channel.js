@@ -1,4 +1,6 @@
 const net = require('net');
+const path = require('path');
+const jsonFile = require('jsonfile');
 const Utils = require('./utils');
 
 /**
@@ -15,11 +17,10 @@ module.exports = class ClientChannel {
      *  clientPrivateKey: 'Private key of this client',
      *  servers: {
      *      [
-     *        {
-     *          serverAddress: '<IP address of the server>',
-     *          serverPort: <Port number>
-     *        }
-     *        // One or more servers to connect to.
+     *        's1', 's2', ...
+     *        // One or more servers to connect to. These server "ids" from
+     *        // config/miner-public-keys.json where each id is the public key
+     *        // of the server.
      *      ]
      *  }
      * }
@@ -35,18 +36,39 @@ module.exports = class ClientChannel {
         if (!options.servers || !Array.isArray(options.servers) || options.servers.length === 0) {
             throw new Error('options parameter should list one or more servers to connect this client channel to.')
         }
-                
+               
+        const self = this;
+        
         // Make a copy of options to keep the originaldata unmutated.
         this.options = Utils.clone(options);
+        this.options.servers = this.options.servers.map(server => {
+            // Create servers as an array of objects, so we can add additional attributes later on.
+            return {
+                identifier: server
+            }
+        });
         
         this.supportedNoiseEngines = ['noise-stream', 'noise-peer'];
     
-        
         // During development and testing, we will support specifying different noise engines.
         if (!this.options.noiseEngine || this.supportedNoiseEngines.indexOf(this.options.noiseEngine) === -1) {
            this.options.noiseEngine = this.supportedNoiseEngines[0];
         }
         
+        // Get the public information about miners. This client will connect to one or more of other miners.
+        this.minersPublicInfo = jsonFile.readFileSync(path.join(__dirname,'./config/miner-public-keys.json'));
+        
+        // Now validate that the options.servers has the right servers requested.
+        this.options.servers.forEach(server => {
+            const serverInfo = self.minersPublicInfo[server.identifier];
+            if (!serverInfo) {
+                throw new Error('Server ' + server.identifier + ' is not one of the available peers to connect to.');
+            } 
+            
+            // Append all properties to the server object.
+            server = Object.assign(server, serverInfo);
+        })
+                
         this.options.retryAttempts = 3;     // Number of retry attempts to reestablish connections.
         this.options.retryTimeoutInMS = 1000;   
         
@@ -112,6 +134,7 @@ module.exports = class ClientChannel {
      *      serverAddress: '<server IP address>',
      *      serverPort: <server port number>
      * }
+     * serverInfo may contain other details, but they are irrelevant for this API.
      * @return - A Promise with the connected socket if successful.
      */
     connect(serverInfo) {
@@ -135,7 +158,7 @@ module.exports = class ClientChannel {
     
     noiseEngine(serverInfo) {
         const supportedEngines = this.supportedNoiseEngines;
-        const serverIdentifier = (serverInfo.serverAddress + ':' + serverInfo.serverPort);
+        const serverIdentifier = serverInfo.identifier;
         let noiseEngine;
         
         switch(this.options.noiseEngine) {
@@ -254,12 +277,12 @@ module.exports = class ClientChannel {
     close() {
         this.options.servers.forEach(server => {
             if (server.socket !== null) {
+                server.noiseClient.close();
+                server.noiseClient = null;
                 server.socket.end();
                 server.socket.removeAllListeners();
                 server.socket.destroy();
                 server.socket = null;
-                server.noiseClient.close();
-                server.noiseClient = null;
             }
         });
     }

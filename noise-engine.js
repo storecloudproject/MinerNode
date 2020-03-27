@@ -12,14 +12,18 @@ module.exports = class NoiseEngine {
     
     /**
      * @param socket - TCP/UTP socket on which the noise protocol will be built.
-     * @param serverIdentifier - Any unique identifier -- "ip address:port" for example -- 
+     * @param serverIdentifier - Any unique identifier -- public key of the server, for example -- 
      * that the caller wants to supply. This identifier is used in the responses 
      * received from the connected server to identify the source of the messages.
      */
     
     constructor(socket, serverIdentifier) {
+        if (!socket || !serverIdentifier) {
+            throw new Error('A valid socket and server identifier are required.');
+        } 
         this.socket = socket;
         this.serverIdentifier = serverIdentifier;
+        
         this.noiseChannel = null;
     }
     

@@ -13,6 +13,7 @@
 const jsonFile = require('jsonfile');
 const noisePeer = require('noise-peer');
 const Config = require('../config/config');
+const fs = require("fs");
 const path = require('path');
 const Utils = require('../utils');
 
@@ -26,7 +27,11 @@ module.exports = class GenerateMinerKeys {
     constructor() {
         this._VALIDATION_MINER_START_PORT = 2020;
         this._STORAGE_MINER_START_PORT = 4040;
-        this.publicKeys = {validationMiners: [], storageMiners: []};
+        
+        this._VALIDATION_MINER_PREFIX = 'v';
+        this._STORAGE_MINER_PREFIX = 's';
+        
+        this.publicKeys = {};   // Captures public information about miners.
         
         this.generateKeysForValidationMiners()
         this.generateKeysForStorageMiners();
@@ -37,10 +42,17 @@ module.exports = class GenerateMinerKeys {
      * Helper function to generate specified number of keys.
      * @param count - Number of keys to generate.
      * @param startPortNumber - Starting port number.
+     * @param minerPrefix - "v" for validation miner and "s" for storage miner.
      */
 
-    generateKeys(count, startPortNumber) {
-        let keys = [];
+    generateKeys(count, startPortNumber, minerPrefix) {
+        let keys = {};
+        const validPrefixes = [this._VALIDATION_MINER_PREFIX, this._STORAGE_MINER_PREFIX];
+        
+        if (!minerPrefix || validPrefixes.indexOf(minerPrefix) === -1) {
+            minerPrefix = validPrefixes[0];     // This choice actually doesn't matter.
+        }
+        
         for (let k = 0; k < count; k++) {
             const keypair = noisePeer.keygen(),
                   key = {
@@ -49,58 +61,86 @@ module.exports = class GenerateMinerKeys {
                     publicKey: keypair.publicKey.toString('hex'), 
                     secretKey: keypair.secretKey.toString('hex')
                   }
-            keys.push(key);
+            keys[minerPrefix+k] = key;    // public key is used as the server identifier.
         }
+        
         return keys;
     }
 
     /**
-     * Generate keys for validation miners.
+     * Generate keys for validation miners. A separate key file is generated for
+     * each miner.
      */
 
     generateKeysForValidationMiners() {
-        const file = path.join(__dirname, '../config/validation-miner-keys.json');
         const keys = this.generateKeys(Config.setup._NUM_OF_VALIDATION_MINERS_PER_MARKET*Config.setup._NUM_OF_MARKETS, 
-                                 this._VALIDATION_MINER_START_PORT);
+                                 this._VALIDATION_MINER_START_PORT, this._VALIDATION_MINER_PREFIX);
+        const parentFolder = path.join(__dirname, '../config/validation-miner-keys/');
 
-        jsonFile.writeFile(file, keys, {flag: 'w'}, (err) => {
-            if (err) {
-                console.log('Creating ' + file + ' failed!')
-                console.log(__dirname);
-                throw (err);
-            }
-            console.log(file + ' file is created successfully.');
+        // First, delete any existing key files created.
+        this.deleteExistingKeyFiles(parentFolder);
+        
+        // Create a separate key file for each miner. The public key is used as the filename.
+        Object.keys(keys).forEach(key => {
+            const file = path.join(parentFolder + key + '.json');
+            jsonFile.writeFile(file, keys[key], {flag: 'w'}, (err) => {
+                if (err) {
+                    throw (err);
+                }
+                //console.log(file + ' is created successfully.');
+            })
         })
 
-        this.publicKeys.validationMiners = keys.map(key => {
-            // Remove secret keys from public information.
-            var copied = Utils.clone(key);
-            delete copied.secretKey;
-            return copied;
-        })
+        // Remove the secret key for each miner and gather the public information.
+        this.publicKeys = Object.assign(this.publicKeys, this.preparePublicKeys(keys));
+
     }
 
     /**
      * Generate keys for storage miners.
      */
     generateKeysForStorageMiners() {
-        const file = path.join(__dirname, '../config/storage-miner-keys.json');
         const keys = this.generateKeys(Config.setup._NUM_OF_STORAGE_MINERS_PER_MARKET*Config.setup._NUM_OF_MARKETS, 
-                                 this._STORAGE_MINER_START_PORT);
+                                 this._STORAGE_MINER_START_PORT, this._STORAGE_MINER_PREFIX);
+        const parentFolder = path.join(__dirname, '../config/storage-miner-keys/');
 
-        jsonFile.writeFile(file, keys, {flag: 'w'}, (err) => {
-            if (err) throw (err);
-            console.log(file + ' file is created successfully.');
+        // First, delete any existing key files created.
+        this.deleteExistingKeyFiles(parentFolder);
+
+        // Create a separate key file for each miner. The public key is used as the filename.
+        Object.keys(keys).forEach(key => {
+            const file = path.join(parentFolder + key + '.json');
+            jsonFile.writeFile(file, keys[key], {flag: 'w'}, (err) => {
+                if (err) {
+                    throw (err);
+                }
+                //console.log(file + ' is created successfully.');
+            })
         })
 
-        this.publicKeys.storageMiners = keys.map(key => {
-            // Remove secret keys from public information.
-            var copied = Utils.clone(key);
-            delete copied.secretKey;
-            return copied;
-        })
+        // Remove the secret key for each miner and gather the public information.
+        this.publicKeys = Object.assign(this.publicKeys, this.preparePublicKeys(keys));
     }
 
+    /**
+     * Filters out private keys to use the public key information for 
+     * the specified miner type.
+     * @param keys - Generated keys for miners.
+     * @return - Dictionary of public information about the miner.
+     */
+    
+    preparePublicKeys(keys) {
+        let publicKeys = {};
+        
+        Object.keys(keys).forEach(key => {
+            let copied = Utils.clone(keys[key]);
+            delete copied.secretKey;
+            copied.identifier = key;    // Add the miner identifier into the miner public info.
+            publicKeys[key] = copied;
+        });
+        
+        return publicKeys;
+    }
     /**
      * Create public key information.
      */ 
@@ -112,8 +152,34 @@ module.exports = class GenerateMinerKeys {
         const file = path.join(__dirname, '../config/miner-public-keys.json');
         jsonFile.writeFile(file, this.publicKeys, {flag: 'w'}, (err) => {
             if (err) throw (err);
-            console.log(file + ' file is created successfully.');
+            //console.log(file + ' file is created successfully.');
         })
+    }
+    
+    /**
+     * Deletes existing key files, if any, from the folder specified. Since this utility
+     * may be called multiple times, this cleanup is used to create a fresh set of 
+     * key files.
+     * All files in the parentFolder will be deleted.
+     * @param parentFolder - Folder containing the key files.
+     */
+    
+    deleteExistingKeyFiles(parentFolder) {
+        if (!fs.existsSync(parentFolder)) {
+            return;
+        }
+
+        const files = fs.readdirSync(parentFolder);
+        for (let f = 0; f < files.length; f++) {
+            const filename = path.join(parentFolder, files[f]);
+            const stat = fs.statSync(filename);
+
+            if (stat.isDirectory()) {
+                this.deleteExistingKeyFiles(filename);
+            } else if (filename !== '.' && filename !== '..') {
+                fs.unlinkSync(filename);
+            }
+        }
     }
 }
 
